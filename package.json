@@ -1,0 +1,16 @@
+{
+  "name": "finverity_lambda_bank_days",
+  "version": "1.0.0",
+  "description": "",
+  "main": "fire-lambda.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node ./fire-lambda.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.993.0"
+  }
+}
