@@ -4,9 +4,11 @@ import axios from "axios";
 import "dotenv/config";
 
 const ENV_BUSINESS_DATES_QUANTITY_TO_STORE = 14;
-const CALENDARIFIC_API_KEY = process.env.CALENDARIFIC_API_KEY;
-const ENV_CALENDARIFIC_API_URL_BASE = "https://calendarific.com/api/v2";
-const ENV_CALENDARIFIC_API_MILLISECONDS_BETWEEN_REQUESTS = 1000;
+const CALENDAR_API_SERVICE_NAME = "HOLIDAYAPI";
+const ENV_CALENDAR_API_KEY = process.env.CALENDAR_API_KEY;
+const ENV_CALENDAR_API_URL_BASE = "https://holidayapi.com/v1";
+const ENV_CALENDAR_API_MILLISECONDS_BETWEEN_REQUESTS =
+  process.env.CALENDAR_API_MILLISECONDS_BETWEEN_REQUESTS || 0;
 const CURRENCY_FOR_COUNTRIES = {
   AED: "AE", // UAE Dirham - Unated Arab Emirates (THE)
   EUR: "ES", // Euro - Spain
@@ -48,37 +50,39 @@ class BusinessDatesForCurrencyPair {
   }
 
   async doDelay() {
+    if (!ENV_CALENDAR_API_MILLISECONDS_BETWEEN_REQUESTS) {
+      return;
+    }
     return new Promise((resolve) =>
-      setTimeout(resolve, ENV_CALENDARIFIC_API_MILLISECONDS_BETWEEN_REQUESTS)
+      setTimeout(resolve, ENV_CALENDAR_API_MILLISECONDS_BETWEEN_REQUESTS)
     );
   }
 
   getUrl(countryCode, year, month = undefined) {
     const monthPart = !!month ? `&month=${month}` : "";
-    return `${ENV_CALENDARIFIC_API_URL_BASE}/holidays?&api_key=${CALENDARIFIC_API_KEY}&country=${countryCode}&year=${year}${monthPart}&type=national`;
+    return `${ENV_CALENDAR_API_URL_BASE}/holidays?&key=${ENV_CALENDAR_API_KEY}&country=${countryCode}&year=${year}${monthPart}&public=true`;
   }
 
   getNextIsoDate(isoDate) {
     return moment(isoDate).add(1, "days").format(ISO_DATE_FORMAT);
   }
 
-  async getCalendarificHolidays(countryCode, year, month = undefined) {
+  async getHolidays(countryCode, year, month = undefined) {
     const apiUrl = this.getUrl(countryCode, year, month);
     console.log({ apiUrl });
     try {
       const {
-        data: {
-          response: { holidays },
-        },
-        // } = await (await fetch(this.getUrl(countryCode, year, month))).json();
+        data: { holidays },
       } = await axios(apiUrl);
+
+      // console.log({ holidays });
 
       // Get holidays from response and filter it for dates begining from today
       return holidays
-        .map((h) => h?.date?.iso)
+        .map((h) => h?.observed)
         .filter((isoDate) => isoDate >= this.currentIsoDate);
     } catch (error) {
-      throw `Clandarific API error: ${error}`;
+      throw `${CALENDAR_API_SERVICE_NAME} API error: ${error}`;
     }
   }
 
@@ -101,7 +105,7 @@ class BusinessDatesForCurrencyPair {
       }
 
       daysOff[currency].push(
-        ...(await this.getCalendarificHolidays(
+        ...(await this.getHolidays(
           CURRENCY_FOR_COUNTRIES[currency],
           this.currentYear
         ))
@@ -112,7 +116,7 @@ class BusinessDatesForCurrencyPair {
         // Wait a second in a series of requests
         await this.doDelay();
         daysOff[currency].push(
-          ...(await this.getCalendarificHolidays(
+          ...(await this.getHolidays(
             CURRENCY_FOR_COUNTRIES[currency],
             this.currentYear + 1,
             1
@@ -186,15 +190,10 @@ class BusinessDatesForCurrencyPair {
 const calculate = async () =>
   await new BusinessDatesForCurrencyPair().fillBusinessDaysForCurrencyPairs();
 
-const calculate2 = () => process.env.CALENDARIFIC_API_KEY;
-const calculate3 = () => CALENDARIFIC_API_KEY;
-
 const handler = async (event, context) => {
   console.log("testing cloud watch");
   return {
     statusCode: 200,
-    // body: "Hello world",
-    // body: await calculate3(),
     body: await calculate(),
     headers: {},
   };
