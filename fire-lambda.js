@@ -1,3 +1,4 @@
 import { handler } from "./index.js";
 
-handler({}, {}).then((result) => console.log({ result }));
+const result = await handler({}, {});
+console.log("Result=", { result });
