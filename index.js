@@ -3,7 +3,8 @@ import moment from "moment-timezone";
 import axios from "axios";
 import "dotenv/config";
 
-const ENV_BUSINESS_DATES_QUANTITY_TO_STORE = 14;
+const ENV_BUSINESS_DATES_QUANTITY_TO_STORE =
+  process.env.BUSINESS_DATES_QUANTITY_TO_STORE || 14;
 const CALENDAR_API_SERVICE_NAME = "HOLIDAYAPI";
 const ENV_CALENDAR_API_KEY = process.env.CALENDAR_API_KEY;
 const ENV_CALENDAR_API_URL_BASE = "https://holidayapi.com/v1";
@@ -31,8 +32,10 @@ class BusinessDatesForCurrencyPair {
     this.currentIsoWeekDay = undefined;
     // Example: '2021-10-30'
     this.currentIsoDate = undefined;
+    this.previousIsoDate = undefined;
     this.currencies = [];
-    this.daysOff = undefined;
+    this.daysOff = {};
+    this.commonHolidaysForCurrencies = {};
   }
 
   init(isoDate = undefined) {
@@ -43,6 +46,7 @@ class BusinessDatesForCurrencyPair {
     this.currentDay = currentMoment.date();
     this.currentIsoWeekDay = currentMoment.isoWeekday();
     this.currentIsoDate = currentMoment.format(ISO_DATE_FORMAT);
+    this.previousIsoDate = this.getPreviousIsoDate(this.currentIsoDate);
     this.currencies = Object.keys(CURRENCY_FOR_COUNTRIES).sort();
     console.log(
       `currentYear=${this.currentYear}, currentMonth=${this.currentMonth}, currentDay=${this.currentDay}, currentIsoWeekDay=${this.currentIsoWeekDay}, currentIsoDate=${this.currentIsoDate}`
@@ -67,6 +71,10 @@ class BusinessDatesForCurrencyPair {
     return moment(isoDate).add(1, "days").format(ISO_DATE_FORMAT);
   }
 
+  getPreviousIsoDate(isoDate) {
+    return moment(isoDate).subtract(1, "days").format(ISO_DATE_FORMAT);
+  }
+
   async getHolidays(countryCode, year, month = undefined) {
     const apiUrl = this.getUrl(countryCode, year, month);
     console.log({ apiUrl });
@@ -80,7 +88,7 @@ class BusinessDatesForCurrencyPair {
       // Get holidays from response and filter it for dates begining from today
       return holidays
         .map((h) => h?.observed)
-        .filter((isoDate) => isoDate >= this.currentIsoDate);
+        .filter((isoDate) => isoDate >= this.previousIsoDate);
     } catch (error) {
       throw `${CALENDAR_API_SERVICE_NAME} API error: ${error}`;
     }
@@ -127,10 +135,41 @@ class BusinessDatesForCurrencyPair {
     return daysOff;
   }
 
-  getIsoDateNotInHolidaysAndNotInWeekend(holidays, needNextDay = false) {
-    let isoDate = needNextDay
-      ? this.getNextIsoDate(this.currentIsoDate)
-      : this.currentIsoDate;
+  getCommonHolidaysForCurrencies() {
+    const commonHolidaysForCurrencies = {};
+    for (const invoice_currency of this.currencies) {
+      commonHolidaysForCurrencies[invoice_currency] = {};
+      for (const client_currency of this.currencies) {
+        const commonHolidays = [
+          ...this.daysOff[invoice_currency],
+          ...this.daysOff[client_currency],
+        ];
+        const commonUniqueHolidays = [...new Set(commonHolidays)];
+        // console.log(`${invoice_currency}-${client_currency}`);
+        // console.log({ commonHolidays, commonUniqueHolidays });
+        commonHolidaysForCurrencies[invoice_currency][client_currency] =
+          commonUniqueHolidays;
+      }
+    }
+    return commonHolidaysForCurrencies;
+  }
+
+  getIsoBusinessDatesToStore() {
+    let isoDate = this.previousIsoDate;
+    const isoBusinessDates = [isoDate];
+    for (let i = 0; i <= ENV_BUSINESS_DATES_QUANTITY_TO_STORE; i++) {
+      isoDate = this.getNextIsoDate(isoDate);
+      isoBusinessDates.push(isoDate);
+    }
+    return isoBusinessDates;
+  }
+
+  getIsoDateNotInHolidaysAndNotInWeekend(
+    forIsoDate,
+    holidays,
+    needNextDay = false
+  ) {
+    let isoDate = needNextDay ? this.getNextIsoDate(forIsoDate) : forIsoDate;
     for (let i = 0; i < ENV_BUSINESS_DATES_QUANTITY_TO_STORE; i++) {
       const isoWeekday = moment(isoDate).isoWeekday();
       if (!holidays.includes(isoDate) && isoWeekday !== 6 && isoWeekday !== 7) {
@@ -146,44 +185,51 @@ class BusinessDatesForCurrencyPair {
   ) {
     this.init(isoTestDate);
 
-    const daysOff = await this.getDaysOff();
-    this.daysOff = daysOff;
+    this.daysOff = await this.getDaysOff();
+    this.commonHolidaysForCurrencies = this.getCommonHolidaysForCurrencies();
 
     // await this.businessDatesForCurrencyPairRepository.delete({});
-    const businessDatesForCurrencyPairsObj = {};
 
     // const newEntities = [];
-    for (const invoice_currency of this.currencies) {
-      for (const client_currency of this.currencies) {
-        const commonHolidays = [
-          ...this.daysOff[invoice_currency],
-          ...this.daysOff[client_currency],
-        ];
-        const commonUniqueHolidays = [...new Set(commonHolidays)];
-        // console.log(`${invoice_currency}-${client_currency}`);
-        // console.log({ commonHolidays, commonUniqueHolidays });
+    const isoBusinessDates = this.getIsoBusinessDatesToStore();
 
-        const date_before_cutoff_time =
-          this.getIsoDateNotInHolidaysAndNotInWeekend(commonUniqueHolidays);
-        const date_after_cutoff_time =
-          this.getIsoDateNotInHolidaysAndNotInWeekend(
-            commonUniqueHolidays,
-            true
-          );
+    const businessDatesForCurrencyPairsObjByDate = {};
+    for (const isoBusinessDate of isoBusinessDates) {
+      const businessDatesForCurrencyPairsObj = {};
+      for (const invoice_currency of this.currencies) {
+        for (const client_currency of this.currencies) {
+          const date_before_cutoff_time =
+            this.getIsoDateNotInHolidaysAndNotInWeekend(
+              isoBusinessDate,
+              this.commonHolidaysForCurrencies[invoice_currency][
+                client_currency
+              ]
+            );
+          const date_after_cutoff_time =
+            this.getIsoDateNotInHolidaysAndNotInWeekend(
+              isoBusinessDate,
+              this.commonHolidaysForCurrencies[invoice_currency][
+                client_currency
+              ],
+              true
+            );
 
-        const toSave = {
-          invoice_currency,
-          client_currency,
-          date_before_cutoff_time,
-          date_after_cutoff_time,
-        };
-        // newEntities.push(toSave);
-        businessDatesForCurrencyPairsObj[invoice_currency + client_currency] =
-          toSave;
+          const toSave = {
+            invoice_currency,
+            client_currency,
+            date_before_cutoff_time,
+            date_after_cutoff_time,
+          };
+          // newEntities.push(toSave);
+          businessDatesForCurrencyPairsObj[invoice_currency + client_currency] =
+            toSave;
+        }
       }
+      businessDatesForCurrencyPairsObjByDate[isoBusinessDate] =
+        businessDatesForCurrencyPairsObj;
     }
     // await this.businessDatesForCurrencyPairRepository.save(newEntities);
-    return businessDatesForCurrencyPairsObj;
+    return businessDatesForCurrencyPairsObjByDate;
   }
 }
 
@@ -192,9 +238,11 @@ const calculate = async () =>
 
 const handler = async (event, context) => {
   console.log("testing cloud watch");
+  const result = await calculate();
+  console.log("result=", JSON.stringify(result, null, 2));
   return {
     statusCode: 200,
-    body: await calculate(),
+    body: result,
     headers: {},
   };
 };
